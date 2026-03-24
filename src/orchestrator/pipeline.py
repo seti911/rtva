@@ -279,24 +279,28 @@ class Orchestrator:
                     # Check if we have a complete sentence
                     if self.has_complete_sentence(tts_buffer):
                         sentence = self.extract_sentence(tts_buffer)
-                        if sentence:
+                        if (
+                            sentence and len(sentence.strip()) > 2
+                        ):  # Ensure it's not just punctuation
                             logger.info(
                                 f"Sending complete sentence to TTS: {sentence[:50]}..."
                             )
                             # Send immediately and wait for completion
                             await self.process_with_tts(sentence)
                             # Keep any remaining text after the sentence
-                            tts_buffer = tts_buffer[len(sentence) :]
+                            tts_buffer = tts_buffer[len(sentence) :].lstrip()
 
                 elif msg_type == "done":
                     logger.info(f"LLM done, full response: {full_response}")
 
                     # Send any remaining buffer to TTS (incomplete sentence)
-                    if tts_buffer.strip():
+                    remaining = tts_buffer.strip()
+                    # Filter out lone punctuation marks
+                    if remaining and sum(1 for c in remaining if c.isalpha()) > 2:
                         logger.info(
-                            f"Sending remaining text to TTS: {tts_buffer[:50]}..."
+                            f"Sending remaining text to TTS: {remaining[:50]}..."
                         )
-                        await self.process_with_tts(tts_buffer)
+                        await self.process_with_tts(remaining)
 
                     await asyncio.sleep(1)
                     self.state = "listening"
@@ -322,19 +326,48 @@ class Orchestrator:
         """Check if text contains a complete sentence ending with punctuation."""
         if not text.strip():
             return False
-        # Look for sentence-ending punctuation
-        return any(text.strip().endswith(p) for p in ".!?")
+        # Look for sentence-ending punctuation with actual content before it
+        for punct in ".!?":
+            idx = text.find(punct)
+            if idx > 0:  # Must have content before punctuation
+                # Check if there's actual text (not just spaces/punctuation)
+                content_before = text[:idx].strip()
+                if len(content_before) > 2:  # At least a few chars
+                    return True
+        return False
 
     def extract_sentence(self, text: str) -> str:
-        """Extract the first complete sentence from text."""
+        """Extract the first complete sentence from text.
+
+        A complete sentence must:
+        - End with .!?
+        - Have meaningful content (not just punctuation)
+        - Contain at least a few characters
+        """
         if not text.strip():
             return ""
 
-        # Find first sentence-ending punctuation
+        # Find first sentence-ending punctuation with actual content
         for punct in ".!?":
             idx = text.find(punct)
-            if idx != -1:
-                return text[: idx + 1].strip()
+            if idx > 2:  # Must have substantial content before punctuation
+                sentence = text[: idx + 1].strip()
+                # Skip if it's just punctuation or very short
+                # Count actual letters/words, not just spaces
+                word_chars = sum(1 for c in sentence if c.isalpha())
+                if word_chars >= 2:  # At least a couple of letters
+                    return sentence
+
+        return ""
+
+        # Find first sentence-ending punctuation with actual content
+        for punct in ".!?":
+            idx = text.find(punct)
+            if idx > 0:  # Must have content before punctuation
+                sentence = text[: idx + 1].strip()
+                # Skip if it's just punctuation or very short
+                if len(sentence) > 2 and not all(c in ".!? " for c in sentence):
+                    return sentence
 
         return ""
 
