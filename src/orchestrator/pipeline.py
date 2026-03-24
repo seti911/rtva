@@ -46,6 +46,9 @@ class Orchestrator:
         self.token_buffer = ""
         self.last_token_time = 0
 
+        # Track TTS tasks to prevent early cancellation
+        self.tts_tasks = set()
+
     async def connect_services(self) -> bool:
         """Connect to all backend services."""
         try:
@@ -275,7 +278,9 @@ class Orchestrator:
 
                     # Send to TTS when buffer has enough text or punctuation
                     if self.should_send_to_tts(tts_buffer):
-                        asyncio.create_task(self.process_with_tts(tts_buffer))
+                        task = asyncio.create_task(self.process_with_tts(tts_buffer))
+                        self.tts_tasks.add(task)
+                        task.add_done_callback(self.tts_tasks.discard)
                         tts_buffer = ""
 
                 elif msg_type == "done":
@@ -283,7 +288,16 @@ class Orchestrator:
 
                     # Send remaining buffer to TTS
                     if tts_buffer.strip():
-                        await self.process_with_tts(tts_buffer)
+                        task = asyncio.create_task(self.process_with_tts(tts_buffer))
+                        self.tts_tasks.add(task)
+                        task.add_done_callback(self.tts_tasks.discard)
+
+                    # Wait for all TTS tasks to complete before finishing
+                    if self.tts_tasks:
+                        logger.info(
+                            f"Waiting for {len(self.tts_tasks)} TTS tasks to complete..."
+                        )
+                        await asyncio.gather(*self.tts_tasks, return_exceptions=True)
 
                     await asyncio.sleep(1)
                     self.state = "listening"
