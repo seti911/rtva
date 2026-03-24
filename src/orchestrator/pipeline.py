@@ -288,7 +288,11 @@ class Orchestrator:
                             # Send immediately and wait for completion
                             await self.process_with_tts(sentence)
                             # Keep any remaining text after the sentence
+                            # Also skip leading punctuation in remaining text
                             tts_buffer = tts_buffer[len(sentence) :].lstrip()
+                            # Skip any leading punctuation marks in the remaining buffer
+                            while tts_buffer and tts_buffer[0] in ".!? ":
+                                tts_buffer = tts_buffer[1:]
 
                 elif msg_type == "done":
                     logger.info(f"LLM done, full response: {full_response}")
