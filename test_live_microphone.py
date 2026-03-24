@@ -9,7 +9,8 @@ import numpy as np
 import sounddevice as sd
 from scipy import signal
 import logging
-import keyboard
+from pynput import keyboard
+import threading
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -21,12 +22,39 @@ CHUNK_SIZE = int(SAMPLE_RATE * CHUNK_DURATION)
 TTS_SAMPLE_RATE = 24000
 
 # PTT Settings
-PTT_KEY = "space"  # Press SPACE to record
+PTT_KEY = keyboard.Key.space
 
 # Service URLs
 STT_URL = "ws://localhost:8001"
 LLM_URL = "ws://localhost:8002"
 TTS_URL = "ws://localhost:8003"
+
+# Global state
+ptt_active = False
+ptt_event = threading.Event()
+stop_recording = False
+
+
+def on_press(key):
+    """Handle key press."""
+    global ptt_active
+    try:
+        if key == PTT_KEY:
+            ptt_active = True
+            ptt_event.set()
+    except AttributeError:
+        pass
+
+
+def on_release(key):
+    """Handle key release."""
+    global ptt_active, stop_recording
+    try:
+        if key == PTT_KEY:
+            ptt_active = False
+            stop_recording = True
+    except AttributeError:
+        pass
 
 
 def get_audio_level(audio_chunk):
@@ -36,59 +64,56 @@ def get_audio_level(audio_chunk):
 
 async def record_with_ptt():
     """Record audio while PTT key is held down."""
-    logger.info(f"🎤 Press and HOLD '{PTT_KEY}' to record, release to stop\n")
+    global ptt_active, stop_recording
     
-    recorded_frames = []
-    is_recording = False
+    logger.info(f"🎤 Press and HOLD SPACE to record, release to stop\n")
+    
+    # Start keyboard listener
+    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.start()
     
     try:
-        while True:
-            # Check if PTT key is pressed
-            if keyboard.is_pressed(PTT_KEY):
-                if not is_recording:
-                    is_recording = True
-                    recorded_frames = []
-                    logger.info("🔴 RECORDING...")
-                
-                # Record chunk while key is held
-                chunk = sd.rec(CHUNK_SIZE, samplerate=SAMPLE_RATE, channels=1, dtype=np.float32)
-                sd.wait()
-                chunk = chunk.flatten()
-                
-                level = get_audio_level(chunk)
-                recorded_frames.append(chunk)
-                
-                # Show level bar
-                bar_length = int(level * 50)
-                bar = "█" * bar_length + "░" * (50 - bar_length)
-                logger.info(f"  {bar} {level:.3f}")
-            
-            else:
-                # Key released
-                if is_recording:
-                    is_recording = False
-                    logger.info("⏹️  STOPPED\n")
-                    
-                    if recorded_frames:
-                        # Process the recorded audio
-                        audio_data = np.concatenate(recorded_frames)
-                        audio_int16 = (audio_data * 32767).astype(np.int16)
-                        
-                        duration = len(audio_data) / SAMPLE_RATE
-                        logger.info(f"✓ Recorded {duration:.1f} seconds\n")
-                        
-                        return audio_int16.tobytes()
-                
-                # Allow checking for menu commands
-                if keyboard.is_pressed("q"):
-                    logger.info("\nExiting...")
-                    return None
-                
-                await asyncio.sleep(0.01)  # Small delay to prevent CPU spam
+        # Wait for key press
+        logger.info("⏳ Waiting for key press...")
+        while not ptt_active:
+            await asyncio.sleep(0.01)
         
-    except KeyboardInterrupt:
-        logger.info("Recording cancelled\n")
+        logger.info("🔴 RECORDING...\n")
+        recorded_frames = []
+        stop_recording = False
+        
+        # Record while key is held
+        while ptt_active:
+            chunk = sd.rec(CHUNK_SIZE, samplerate=SAMPLE_RATE, channels=1, dtype=np.float32)
+            sd.wait()
+            chunk = chunk.flatten()
+            
+            level = get_audio_level(chunk)
+            recorded_frames.append(chunk)
+            
+            # Show level bar
+            bar_length = int(level * 40)
+            bar = "█" * bar_length + "░" * (40 - bar_length)
+            logger.info(f"  {bar} {level:.4f}")
+            
+            await asyncio.sleep(0.001)  # Very small delay for other tasks
+        
+        logger.info("\n⏹️  STOPPED\n")
+        
+        if recorded_frames:
+            # Process the recorded audio
+            audio_data = np.concatenate(recorded_frames)
+            audio_int16 = (audio_data * 32767).astype(np.int16)
+            
+            duration = len(audio_data) / SAMPLE_RATE
+            logger.info(f"✓ Recorded {duration:.2f} seconds\n")
+            
+            return audio_int16.tobytes()
+        
         return None
+    
+    finally:
+        listener.stop()
 
 
 async def transcribe_audio(audio_bytes):
@@ -231,6 +256,7 @@ async def conversation_turn(turn_num):
     # Record speech (PTT)
     audio_bytes = await record_with_ptt()
     if not audio_bytes:
+        logger.warning("⚠️  No audio recorded\n")
         return False
     
     # Transcribe
@@ -255,9 +281,9 @@ async def main():
     logger.info("🎤 LIVE FRENCH VOICE ASSISTANT (PUSH-TO-TALK)")
     logger.info("=" * 75)
     logger.info("\nPipeline: STT (Parakeet-TDT) → LLM (CroissantLLM) → TTS (XTTS)")
-    logger.info(f"Controls:")
-    logger.info(f"  SPACE  = Press and hold to record")
-    logger.info(f"  Q      = Quit\n")
+    logger.info("\nControls:")
+    logger.info("  SPACE  = Press and hold to record")
+    logger.info("  Ctrl+C = Quit\n")
     
     turn = 1
     
