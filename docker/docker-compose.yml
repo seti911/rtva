@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: docker/orchestrator.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - STT_URL=ws://stt-service:8001/stt
+      - LLM_URL=ws://llm-service:8002/llm
+      - TTS_URL=ws://tts-service:8003/tts
+      - AUDIO_BRIDGE_URL=ws://audio-bridge:8004/audio
+    depends_on:
+      - stt-service
+      - llm-service
+      - tts-service
+      - audio-bridge
+    volumes:
+      - ../models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - voice-net
+
+  stt-service:
+    build:
+      context: ..
+      dockerfile: docker/stt.Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../models:/models
+    environment:
+      - VOSK_MODEL_PATH=/models/vosk-model-fr
+    networks:
+      - voice-net
+
+  llm-service:
+    build:
+      context: ..
+      dockerfile: docker/llm.Dockerfile
+    ports:
+      - "8002:8002"
+    volumes:
+      - ../models:/models
+    # LLM runs on CPU (small model)
+    networks:
+      - voice-net
+
+  tts-service:
+    build:
+      context: ..
+      dockerfile: docker/tts.Dockerfile
+    ports:
+      - "8003:8003"
+    volumes:
+      - ../models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - voice-net
+
+  audio-bridge:
+    build:
+      context: ..
+      dockerfile: docker/audio-bridge.Dockerfile
+    ports:
+      - "8004:8004"
+    devices:
+      - /dev/snd:/dev/snd
+    volumes:
+      - /etc/asound.conf:/etc/asound.conf:ro
+    environment:
+      - ALSA_CARD=0
+    networks:
+      - voice-net
+
+networks:
+  voice-net:
+    driver: bridge

@@ -1,0 +1,23 @@
+# Core dependencies
+websockets>=12.0
+numpy>=1.26.0
+
+# STT
+faster-whisper>=1.0.0
+
+# TTS - use latest version compatible with Python 3.12
+TTS>=0.22.0
+
+# Audio
+sounddevice>=0.4.6
+soundfile>=0.12.1
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# Development
+black>=24.0.0
+ruff>=0.3.0
+mypy>=1.8.0
