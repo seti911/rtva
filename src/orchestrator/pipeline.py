@@ -46,9 +46,6 @@ class Orchestrator:
         self.token_buffer = ""
         self.last_token_time = 0
 
-        # Track TTS tasks to prevent early cancellation
-        self.tts_tasks = set()
-
         # Lock for TTS requests (WebSocket not thread-safe with concurrent requests)
         self.tts_lock = asyncio.Lock()
 
@@ -279,28 +276,27 @@ class Orchestrator:
 
                     logger.info(f"LLM token: {token}")
 
-                    # Send to TTS when buffer has enough text or punctuation
-                    if self.should_send_to_tts(tts_buffer):
-                        task = asyncio.create_task(self.process_with_tts(tts_buffer))
-                        self.tts_tasks.add(task)
-                        task.add_done_callback(self.tts_tasks.discard)
-                        tts_buffer = ""
+                    # Check if we have a complete sentence
+                    if self.has_complete_sentence(tts_buffer):
+                        sentence = self.extract_sentence(tts_buffer)
+                        if sentence:
+                            logger.info(
+                                f"Sending complete sentence to TTS: {sentence[:50]}..."
+                            )
+                            # Send immediately and wait for completion
+                            await self.process_with_tts(sentence)
+                            # Keep any remaining text after the sentence
+                            tts_buffer = tts_buffer[len(sentence) :]
 
                 elif msg_type == "done":
                     logger.info(f"LLM done, full response: {full_response}")
 
-                    # Send remaining buffer to TTS
+                    # Send any remaining buffer to TTS (incomplete sentence)
                     if tts_buffer.strip():
-                        task = asyncio.create_task(self.process_with_tts(tts_buffer))
-                        self.tts_tasks.add(task)
-                        task.add_done_callback(self.tts_tasks.discard)
-
-                    # Wait for all TTS tasks to complete before finishing
-                    if self.tts_tasks:
                         logger.info(
-                            f"Waiting for {len(self.tts_tasks)} TTS tasks to complete..."
+                            f"Sending remaining text to TTS: {tts_buffer[:50]}..."
                         )
-                        await asyncio.gather(*self.tts_tasks, return_exceptions=True)
+                        await self.process_with_tts(tts_buffer)
 
                     await asyncio.sleep(1)
                     self.state = "listening"
@@ -322,15 +318,25 @@ class Orchestrator:
             return True
         return False
 
-    def should_trigger_tts(self, token: str) -> bool:
-        """Determine if we should send buffer to TTS."""
-        # Trigger on punctuation
-        if token.strip()[-1:] in ".!?":
-            return True
-        # Trigger on buffer size
-        if len(self.token_buffer.split()) >= 20:
-            return True
-        return False
+    def has_complete_sentence(self, text: str) -> bool:
+        """Check if text contains a complete sentence ending with punctuation."""
+        if not text.strip():
+            return False
+        # Look for sentence-ending punctuation
+        return any(text.strip().endswith(p) for p in ".!?")
+
+    def extract_sentence(self, text: str) -> str:
+        """Extract the first complete sentence from text."""
+        if not text.strip():
+            return ""
+
+        # Find first sentence-ending punctuation
+        for punct in ".!?":
+            idx = text.find(punct)
+            if idx != -1:
+                return text[: idx + 1].strip()
+
+        return ""
 
     async def process_with_tts(self, text: str) -> None:
         """Convert text to speech and stream to clients."""
