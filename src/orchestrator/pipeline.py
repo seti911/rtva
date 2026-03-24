@@ -49,6 +49,9 @@ class Orchestrator:
         # Track TTS tasks to prevent early cancellation
         self.tts_tasks = set()
 
+        # Lock for TTS requests (WebSocket not thread-safe with concurrent requests)
+        self.tts_lock = asyncio.Lock()
+
     async def connect_services(self) -> bool:
         """Connect to all backend services."""
         try:
@@ -338,42 +341,44 @@ class Orchestrator:
             logger.error("TTS service not connected")
             return
 
-        logger.info(f"Synthesizing: {text[:50]}...")
+        # Use lock to ensure only one TTS request at a time on shared WebSocket
+        async with self.tts_lock:
+            logger.info(f"Synthesizing: {text[:50]}...")
 
-        tts_request = json.dumps(
-            {
-                "type": "synthesize",
-                "payload": {
-                    "text": text,
-                    "language": self.config["language"],
-                    "reference_wav": self.config.get("voice_reference"),
-                },
-            }
-        )
+            tts_request = json.dumps(
+                {
+                    "type": "synthesize",
+                    "payload": {
+                        "text": text,
+                        "language": self.config["language"],
+                        "reference_wav": self.config.get("voice_reference"),
+                    },
+                }
+            )
 
-        await self.tts_ws.send(tts_request)
+            await self.tts_ws.send(tts_request)
 
-        try:
-            message = await self.tts_ws.recv()
-            data = json.loads(message)
-            msg_type = data.get("type")
+            try:
+                message = await self.tts_ws.recv()
+                data = json.loads(message)
+                msg_type = data.get("type")
 
-            if msg_type == "audio":
-                payload = data.get("payload", {})
-                audio_data = payload.get("audio_data", "")
-                duration_ms = payload.get("duration_ms", 0)
+                if msg_type == "audio":
+                    payload = data.get("payload", {})
+                    audio_data = payload.get("audio_data", "")
+                    duration_ms = payload.get("duration_ms", 0)
 
-                logger.info(f"TTS audio received: {duration_ms}ms")
+                    logger.info(f"TTS audio received: {duration_ms}ms")
 
-                await self.broadcast(
-                    {
-                        "type": "audio_output",
-                        "payload": {"data": audio_data, "duration_ms": duration_ms},
-                    }
-                )
+                    await self.broadcast(
+                        {
+                            "type": "audio_output",
+                            "payload": {"data": audio_data, "duration_ms": duration_ms},
+                        }
+                    )
 
-        except Exception as e:
-            logger.error(f"TTS error: {e}")
+            except Exception as e:
+                logger.error(f"TTS error: {e}")
 
     async def broadcast(self, message: Dict) -> None:
         """Broadcast message to all connected clients."""
