@@ -50,44 +50,58 @@ class STTService:
         logger.info("STT SERVICE: Parakeet-TDT 0.6B with OfflineRecognizer")
         logger.info("=" * 70)
 
-        model_path = os.environ.get("PARAKEET_MODEL_PATH", "/models/parakeet")
+        # Try official sherpa-onnx model first
+        official_model_path = os.environ.get(
+            "PARAKEET_MODEL_PATH", "/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+        )
 
-        encoder = f"{model_path}/encoder.int8.onnx"
-        decoder = f"{model_path}/decoder.int8.onnx"
-        joiner = f"{model_path}/joiner.int8.onnx"
-        tokens = f"{model_path}/tokens.txt"
+        encoder = f"{official_model_path}/encoder.int8.onnx"
+        decoder = f"{official_model_path}/decoder.int8.onnx"
+        joiner = f"{official_model_path}/joiner.int8.onnx"
+        tokens = f"{official_model_path}/tokens.txt"
 
-        logger.info(f"Checking for Parakeet-TDT model in {model_path}")
+        logger.info(f"Checking for Parakeet-TDT model in {official_model_path}")
 
-        # Try to load real model if available
+        # Try to load official sherpa-onnx model
         model_files_exist = all(
             os.path.exists(f) for f in [encoder, decoder, joiner, tokens]
         )
 
         if SHERPA_AVAILABLE and model_files_exist:
-            logger.info("Model files found")
-            logger.warning(
-                "⚠️  NOTE: Current model files (08/2025) require OnlineRecognizer"
-            )
-            logger.warning("    but are missing required metadata for streaming")
-            logger.warning("    Using intelligent dummy mode for pipeline testing")
-            logger.info("\n📋 To enable real Parakeet-TDT transcription:")
-            logger.info("   1. Download official sherpa-onnx Parakeet-TDT model:")
-            logger.info("      https://github.com/k2-fsa/sherpa-onnx/releases")
-            logger.info("   2. Extract to /models/parakeet-online/")
-            logger.info(
-                "   3. Implement OnlineRecognizer with frame-by-frame streaming"
-            )
-            logger.info("   4. This will enable <50ms latency true streaming ASR")
-            logger.info("=" * 70)
-            self._init_dummy_mode()
+            try:
+                logger.info("Official Parakeet-TDT v3 model files found - loading...")
+                self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+                    encoder=encoder,
+                    decoder=decoder,
+                    joiner=joiner,
+                    tokens=tokens,
+                    num_threads=4,
+                    model_type="nemo_transducer",
+                )
+                self.use_real_model = True
+                logger.info(
+                    "✅ Official Parakeet-TDT 0.6B v3 model loaded successfully!"
+                )
+                logger.info("   25 European languages supported")
+                logger.info("   RTF: 0.118-0.325 on CPU (varies by language)")
+                logger.info("=" * 70)
+
+            except Exception as e:
+                logger.warning(f"Could not load official model: {e}")
+                logger.info("Falling back to intelligent dummy mode...")
+                self._init_dummy_mode()
         else:
             if not SHERPA_AVAILABLE:
                 logger.warning("sherpa_onnx library not available!")
             else:
-                logger.info(f"Model files not found in {model_path}")
+                logger.info(f"Official model files not found in {official_model_path}")
             logger.info(
                 "Using intelligent dummy implementation for pipeline testing..."
+            )
+            logger.info("\n📋 To use real Parakeet-TDT transcription:")
+            logger.info("   Download: https://github.com/k2-fsa/sherpa-onnx/releases")
+            logger.info(
+                "   Look for: sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
             )
             logger.info("=" * 70)
             self._init_dummy_mode()
@@ -109,17 +123,42 @@ class STTService:
     async def _transcribe_real(
         self, audio_data: bytes, sample_rate: int
     ) -> Transcription:
-        """Transcribe using OfflineRecognizer (model compatibility check)."""
-        # NOTE: Current model files from 08/2025 are incompatible with sherpa-onnx 1.12.33
-        # They require OnlineRecognizer setup with proper metadata (window_size, etc.)
-        # To use real transcription:
-        # 1. Download official Parakeet-TDT model with OnlineRecognizer support
-        # 2. Use OnlineRecognizer instead of OfflineRecognizer for true streaming
-        # For now, falling back to dummy mode for pipeline testing
-        logger.warning(
-            "Real model transcription unavailable - model files incompatible with sherpa-onnx"
-        )
-        return await self._transcribe_dummy(audio_data, sample_rate)
+        """Transcribe using OfflineRecognizer with Parakeet-TDT v3."""
+        try:
+            audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+            audio_float32 = audio_int16.astype(np.float32) / 32768.0
+
+            chunk_samples = len(audio_float32)
+            chunk_ms = chunk_samples / sample_rate * 1000
+            logger.info(
+                f"Transcribing: {chunk_samples} samples ({chunk_ms:.0f}ms) at {sample_rate} Hz"
+            )
+
+            # Use OfflineRecognizer for batch transcription
+            stream = self.recognizer.create_stream()
+            stream.accept_waveform(sample_rate, audio_float32)
+            self.recognizer.decode_stream(stream)
+            result = stream.result
+            text = result.text.strip()
+
+            if text:
+                logger.info(f"✓ Parakeet-TDT: '{text}'")
+                confidence = 0.95
+            else:
+                logger.debug("No speech detected (silent chunk)")
+                confidence = 0.0
+
+            return Transcription(
+                text=text,
+                is_final=True,
+                confidence=confidence,
+                timestamp_start=0,
+                timestamp_end=chunk_ms,
+            )
+
+        except Exception as e:
+            logger.error(f"Transcription failed: {e}", exc_info=True)
+            return Transcription(text="", is_final=True, confidence=0.0)
 
     async def _transcribe_dummy(
         self, audio_data: bytes, sample_rate: int

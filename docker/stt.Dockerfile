@@ -20,14 +20,12 @@ RUN pip install --no-cache-dir \
     "sherpa-onnx>=1.9.0"
 
 ENV PYTHONPATH=/app
-ENV PARAKEET_MODEL_PATH=/models/parakeet
+ENV PARAKEET_MODEL_PATH=/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8
 
 EXPOSE 8001
 
-# Note: To enable real Parakeet-TDT streaming transcription:
-# 1. Download official model from sherpa-onnx releases
-# 2. Mount at /models/parakeet-online/
-# 3. Update service to use OnlineRecognizer
-# Currently using intelligent dummy mode for pipeline testing
+# Uses official Parakeet-TDT v3 model from sherpa-onnx
+# Supports 25 European languages including French
+# Model should be mounted at /models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/
 
 CMD ["python", "/app/stt_service/service.py"]
