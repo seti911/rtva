@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live microphone input with TTS output for French voice assistant."""
+"""Live microphone input with push-to-talk (PTT) for French voice assistant."""
 
 import asyncio
 import websockets
@@ -7,17 +7,21 @@ import json
 import base64
 import numpy as np
 import sounddevice as sd
+from scipy import signal
 import logging
+import keyboard
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 # Configuration
 SAMPLE_RATE = 16000
-CHUNK_DURATION = 0.5  # seconds per chunk
+CHUNK_DURATION = 0.05  # 50ms chunks for real-time response
 CHUNK_SIZE = int(SAMPLE_RATE * CHUNK_DURATION)
-SILENCE_THRESHOLD = 0.02  # amplitude threshold
-MIN_SILENCE_DURATION = 1.0  # seconds of silence to end utterance
+TTS_SAMPLE_RATE = 24000
+
+# PTT Settings
+PTT_KEY = "space"  # Press SPACE to record
 
 # Service URLs
 STT_URL = "ws://localhost:8001"
@@ -25,51 +29,62 @@ LLM_URL = "ws://localhost:8002"
 TTS_URL = "ws://localhost:8003"
 
 
-def is_silent(audio_chunk, threshold=SILENCE_THRESHOLD):
-    """Check if audio chunk is silent."""
-    return np.max(np.abs(audio_chunk)) < threshold
+def get_audio_level(audio_chunk):
+    """Get RMS level of audio chunk."""
+    return np.sqrt(np.mean(audio_chunk ** 2))
 
 
-async def record_utterance():
-    """Record audio until silence is detected."""
-    logger.info("🎤 Listening... (speak now, will stop after 1 second of silence)")
+async def record_with_ptt():
+    """Record audio while PTT key is held down."""
+    logger.info(f"🎤 Press and HOLD '{PTT_KEY}' to record, release to stop\n")
     
     recorded_frames = []
-    silence_frames = 0
-    max_silence_frames = int(MIN_SILENCE_DURATION / CHUNK_DURATION)
-    speech_detected = False
+    is_recording = False
     
     try:
         while True:
-            # Record chunk
-            chunk = sd.rec(CHUNK_SIZE, samplerate=SAMPLE_RATE, channels=1, dtype=np.float32)
-            sd.wait()
-            chunk = chunk.flatten()
-            
-            # Check for speech
-            if is_silent(chunk):
-                if speech_detected:
-                    silence_frames += 1
-                    logger.info(f"  Silence... ({silence_frames}/{max_silence_frames})")
-                    if silence_frames >= max_silence_frames:
-                        logger.info("✓ Recording complete\n")
-                        break
-            else:
-                speech_detected = True
-                silence_frames = 0
+            # Check if PTT key is pressed
+            if keyboard.is_pressed(PTT_KEY):
+                if not is_recording:
+                    is_recording = True
+                    recorded_frames = []
+                    logger.info("🔴 RECORDING...")
+                
+                # Record chunk while key is held
+                chunk = sd.rec(CHUNK_SIZE, samplerate=SAMPLE_RATE, channels=1, dtype=np.float32)
+                sd.wait()
+                chunk = chunk.flatten()
+                
+                level = get_audio_level(chunk)
                 recorded_frames.append(chunk)
-                logger.info(f"  Recording... ({len(recorded_frames) * CHUNK_DURATION:.1f}s)")
-        
-        if not recorded_frames:
-            logger.warning("No speech detected\n")
-            return None
-        
-        # Combine frames
-        audio_data = np.concatenate(recorded_frames)
-        audio_int16 = (audio_data * 32767).astype(np.int16)
-        
-        logger.info(f"✓ Recorded {len(audio_data) / SAMPLE_RATE:.1f} seconds\n")
-        return audio_int16.tobytes()
+                
+                # Show level bar
+                bar_length = int(level * 50)
+                bar = "█" * bar_length + "░" * (50 - bar_length)
+                logger.info(f"  {bar} {level:.3f}")
+            
+            else:
+                # Key released
+                if is_recording:
+                    is_recording = False
+                    logger.info("⏹️  STOPPED\n")
+                    
+                    if recorded_frames:
+                        # Process the recorded audio
+                        audio_data = np.concatenate(recorded_frames)
+                        audio_int16 = (audio_data * 32767).astype(np.int16)
+                        
+                        duration = len(audio_data) / SAMPLE_RATE
+                        logger.info(f"✓ Recorded {duration:.1f} seconds\n")
+                        
+                        return audio_int16.tobytes()
+                
+                # Allow checking for menu commands
+                if keyboard.is_pressed("q"):
+                    logger.info("\nExiting...")
+                    return None
+                
+                await asyncio.sleep(0.01)  # Small delay to prevent CPU spam
         
     except KeyboardInterrupt:
         logger.info("Recording cancelled\n")
@@ -100,11 +115,11 @@ async def transcribe_audio(audio_bytes):
                     logger.info(f"✓ You said: \"{text}\"\n")
                     return text
             
-            logger.warning("No transcription received\n")
+            logger.warning("❌ No transcription received\n")
             return None
             
     except Exception as e:
-        logger.error(f"STT error: {e}\n")
+        logger.error(f"❌ STT error: {e}\n")
         return None
 
 
@@ -145,12 +160,21 @@ async def get_llm_response(user_text):
                 logger.info(f"✓ AI said: \"{full_text}\"\n")
                 return full_text
             
-            logger.warning("No LLM response received\n")
+            logger.warning("❌ No LLM response received\n")
             return None
             
     except Exception as e:
-        logger.error(f"LLM error: {e}\n")
+        logger.error(f"❌ LLM error: {e}\n")
         return None
+
+
+def resample_audio(audio_data, orig_sr, target_sr):
+    """Resample audio."""
+    if orig_sr == target_sr:
+        return audio_data
+    
+    num_samples = int(len(audio_data) * target_sr / orig_sr)
+    return signal.resample(audio_data, num_samples)
 
 
 async def synthesize_and_play(text):
@@ -175,33 +199,37 @@ async def synthesize_and_play(text):
                 audio_b64 = response.get("payload", {}).get("audio_data", "")
                 if audio_b64:
                     audio_data = base64.b64decode(audio_b64)
-                    logger.info(f"✓ Generated audio, playing...\n")
+                    logger.info(f"✓ Generated audio")
                     
-                    # Play audio
+                    # Convert and resample
                     audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
-                    sd.play(audio_int16, SAMPLE_RATE)
+                    audio_float32 = audio_int16.astype(np.float32) / 32768.0
+                    audio_resampled = resample_audio(audio_float32, TTS_SAMPLE_RATE, SAMPLE_RATE)
+                    
+                    logger.info(f"🎵 Playing...\n")
+                    sd.play(audio_resampled, SAMPLE_RATE)
                     sd.wait()
                     logger.info("✓ Done\n")
                     
                     return True
             
-            logger.warning("No audio received from TTS\n")
+            logger.warning("❌ No audio received from TTS\n")
             return False
             
     except Exception as e:
-        logger.error(f"TTS error: {e}\n")
+        logger.error(f"❌ TTS error: {e}\n")
         return False
 
 
 async def conversation_turn(turn_num):
-    """Single conversation turn: record -> transcribe -> respond -> speak."""
+    """Single conversation turn."""
     
     logger.info("─" * 75)
     logger.info(f"TURN {turn_num}")
     logger.info("─" * 75 + "\n")
     
-    # Record speech
-    audio_bytes = await record_utterance()
+    # Record speech (PTT)
+    audio_bytes = await record_with_ptt()
     if not audio_bytes:
         return False
     
@@ -224,20 +252,18 @@ async def conversation_turn(turn_num):
 async def main():
     """Main conversation loop."""
     logger.info("=" * 75)
-    logger.info("🎤 LIVE FRENCH VOICE ASSISTANT")
+    logger.info("🎤 LIVE FRENCH VOICE ASSISTANT (PUSH-TO-TALK)")
     logger.info("=" * 75)
     logger.info("\nPipeline: STT (Parakeet-TDT) → LLM (CroissantLLM) → TTS (XTTS)")
-    logger.info("Press Ctrl+C to exit\n")
+    logger.info(f"Controls:")
+    logger.info(f"  SPACE  = Press and hold to record")
+    logger.info(f"  Q      = Quit\n")
     
     turn = 1
     
     try:
         while True:
-            success = await conversation_turn(turn)
-            
-            if not success:
-                logger.warning("Turn failed, try again\n")
-            
+            await conversation_turn(turn)
             turn += 1
             
     except KeyboardInterrupt:
