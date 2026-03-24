@@ -235,13 +235,12 @@ class Orchestrator:
         self.state = "processing"
         await self.broadcast_status()
 
-        full_prompt = f"[INST]Tu es un assistant vocal. Réponds brièvement en français.\n\nUser: {prompt}\nAssistant:"
-
+        # Send raw prompt - LLM service handles chat formatting
         llm_request = json.dumps(
             {
                 "type": "generate",
                 "payload": {
-                    "prompt": full_prompt,
+                    "prompt": prompt,
                     "max_tokens": 128,
                     "temperature": self.config["llm_temperature"],
                     "stream": True,
