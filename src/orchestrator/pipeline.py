@@ -287,6 +287,8 @@ class Orchestrator:
                             )
                             # Send immediately and wait for completion
                             await self.process_with_tts(sentence)
+                            # Add a short pause between sentences (300ms of silence)
+                            await self.add_silence_pause(duration_ms=300)
                             # Keep any remaining text after the sentence
                             # Also skip leading punctuation in remaining text
                             tts_buffer = tts_buffer[len(sentence) :].lstrip()
@@ -422,6 +424,30 @@ class Orchestrator:
 
             except Exception as e:
                 logger.error(f"TTS error: {e}")
+
+    async def add_silence_pause(self, duration_ms: int = 300) -> None:
+        """Add a pause (silence) between sentences."""
+        # Generate silence: 16-bit PCM at 24000 Hz
+        import numpy as np
+
+        sample_rate = 24000
+        num_samples = int(sample_rate * duration_ms / 1000)
+        silence = np.zeros(num_samples, dtype=np.int16)
+        audio_bytes = silence.tobytes()
+
+        # Encode and broadcast silence
+        import base64
+
+        audio_b64 = base64.b64encode(audio_bytes).decode()
+
+        await self.broadcast(
+            {
+                "type": "audio_output",
+                "payload": {"data": audio_b64, "duration_ms": duration_ms},
+            }
+        )
+
+        logger.info(f"Added {duration_ms}ms silence pause")
 
     async def broadcast(self, message: Dict) -> None:
         """Broadcast message to all connected clients."""
