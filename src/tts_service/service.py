@@ -104,6 +104,39 @@ class TTSService:
             # Return placeholder audio
             return self._generate_beep(), 500
 
+    def _trim_silence(
+        self,
+        audio_bytes: bytes,
+        threshold: int = 1000,
+        min_silence_duration: int = 4800,
+    ) -> bytes:
+        """Trim trailing silence from audio.
+
+        Args:
+            audio_bytes: Raw PCM audio data (16-bit, little-endian)
+            threshold: Amplitude threshold for silence detection
+            min_silence_duration: Minimum samples of silence to trim
+
+        Returns:
+            Audio bytes with trailing silence removed
+        """
+        if not audio_bytes:
+            return audio_bytes
+
+        audio = np.frombuffer(audio_bytes, dtype=np.int16)
+
+        # Find last non-silent sample
+        for i in range(len(audio) - 1, -1, -1):
+            if abs(audio[i]) > threshold:
+                # Check if we have enough silence after this point
+                silence_after = len(audio) - i - 1
+                if silence_after >= min_silence_duration:
+                    # Trim the silence
+                    audio = audio[: i + 1]
+                    break
+
+        return audio.astype(np.int16).tobytes()
+
     def _generate_beep(self) -> bytes:
         """Generate a simple beep as placeholder."""
         import numpy as np
@@ -199,6 +232,12 @@ class TTSService:
         logger.info(f"Synthesizing: {text[:50]}...")
 
         audio_bytes, duration_ms = await self.synthesize(text, language, reference_wav)
+
+        # Trim trailing silence to avoid artifacts at chunk boundaries
+        if audio_bytes:
+            audio_bytes = self._trim_silence(audio_bytes)
+            # Recalculate duration after trimming
+            duration_ms = int(len(audio_bytes) / 24000 * 1000)
 
         if audio_bytes:
             audio_b64 = base64.b64encode(audio_bytes).decode()
