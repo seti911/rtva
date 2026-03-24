@@ -7,14 +7,14 @@ import base64
 import websockets
 import subprocess
 import os
-import wave
 import tempfile
+import struct
 
 ORCHESTRATOR_URL = "ws://localhost:8000/ws"
 
 
 class StreamingAudioPlayer:
-    """Play audio chunks as they arrive using a named pipe."""
+    """Play audio chunks as they arrive using ffmpeg (smooth streaming)."""
 
     def __init__(self, sample_rate=24000):
         self.sample_rate = sample_rate
@@ -23,30 +23,52 @@ class StreamingAudioPlayer:
         self.pipe_file = None
         self.running = False
         self.temp_dir = tempfile.mkdtemp()
+        self.total_samples = 0
 
     def start(self):
-        """Start the player with a named pipe."""
+        """Start ffmpeg to play raw PCM from a named pipe."""
         self.running = True
         self.pipe_path = os.path.join(self.temp_dir, "audio_fifo")
 
         # Create named pipe
-        os.mkfifo(self.pipe_path)
+        try:
+            os.mkfifo(self.pipe_path)
+        except FileExistsError:
+            os.unlink(self.pipe_path)
+            os.mkfifo(self.pipe_path)
 
-        # Start aplay reading from the named pipe in background
+        # Start ffmpeg reading raw PCM and piping to aplay
+        # ffmpeg will handle the audio format conversion smoothly
         self.player_process = subprocess.Popen(
             [
-                "aplay",
+                "ffmpeg",
                 "-f",
-                "S16_LE",
-                "-r",
-                str(self.sample_rate),
-                "-c",
-                "1",
-                self.pipe_path,
+                "s16le",  # Input: signed 16-bit little-endian
+                "-ar",
+                str(self.sample_rate),  # Sample rate
+                "-ac",
+                "1",  # Mono
+                "-i",
+                self.pipe_path,  # Read from FIFO
+                "-f",
+                "s16le",  # Output format
+                "-",  # Output to stdout
             ],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
         )
+
+        # Pipe ffmpeg output to aplay
+        self.aplay_process = subprocess.Popen(
+            ["aplay", "-f", "S16_LE", "-r", str(self.sample_rate), "-c", "1"],
+            stdin=self.player_process.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Allow ffmpeg's stdout to be used by aplay
+        self.player_process.stdout.close()
 
         # Open the pipe for writing
         self.pipe_file = open(self.pipe_path, "wb", buffering=0)
@@ -57,8 +79,12 @@ class StreamingAudioPlayer:
         if self.running and self.pipe_file:
             try:
                 self.pipe_file.write(audio_bytes)
-            except BrokenPipeError:
-                # aplay closed the pipe (e.g., error)
+                self.pipe_file.flush()
+                self.total_samples += (
+                    len(audio_bytes) // 2
+                )  # 16-bit = 2 bytes per sample
+            except (BrokenPipeError, OSError):
+                # aplay/ffmpeg closed the pipe
                 self.running = False
 
     def finish(self):
@@ -73,13 +99,19 @@ class StreamingAudioPlayer:
                 except:
                     pass
 
-            # Wait for aplay to finish
-            if self.player_process:
+            # Wait for processes to finish
+            if self.aplay_process:
                 try:
-                    self.player_process.wait(timeout=60)
+                    self.aplay_process.wait(timeout=60)
                     print("✓ Audio playback complete")
                 except subprocess.TimeoutExpired:
                     print("⚠ Timeout waiting for audio playback")
+                    self.aplay_process.kill()
+
+            if self.player_process:
+                try:
+                    self.player_process.wait(timeout=5)
+                except:
                     self.player_process.kill()
 
             # Clean up
@@ -137,8 +169,9 @@ async def test_tts(question: str):
 
                     # Add chunk to player
                     player.add_chunk(audio_bytes)
+                    duration_ms = (len(audio_bytes) // 2 / 24000) * 1000
                     print(
-                        f"\n[Chunk {chunk_count}: {len(audio_bytes)} bytes]",
+                        f"\n[Chunk {chunk_count}: {len(audio_bytes)} bytes (~{duration_ms:.0f}ms)]",
                         end="",
                         flush=True,
                     )
@@ -152,7 +185,10 @@ async def test_tts(question: str):
             # Wait for all audio to finish playing
             if chunk_count > 0:
                 player.finish()
-                print(f"\n✓ Total audio: {total_bytes} bytes ({chunk_count} chunks)")
+                total_duration = total_bytes // 2 / 24000
+                print(
+                    f"\n✓ Total audio: {total_bytes} bytes ({chunk_count} chunks, ~{total_duration:.1f}s)"
+                )
             else:
                 print("\n✗ No audio received")
 
