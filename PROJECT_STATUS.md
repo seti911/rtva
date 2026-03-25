@@ -1,6 +1,6 @@
-# French Voice Assistant - Project Status
+# Real-Time Local Voice Assistant (RTVA) - Project Status
 
-**Status**: ✅ **FULLY OPERATIONAL** - Ready for microphone input!
+**Status**: ✅ **FULLY OPERATIONAL** - Production ready with microphone input support
 
 ## Overview
 
@@ -54,8 +54,8 @@ A complete end-to-end French language voice assistant with:
 cd /home/stef/Development/localAI/rtva/docker
 docker-compose up -d
 
-# 2. Run microphone client (test with pre-recorded audio)
-python3 /home/stef/Development/localAI/rtva/test_microphone_simulation.py
+# 2. Run microphone client
+python3 /home/stef/Development/localAI/rtva/microphone_client.py
 ```
 
 ### With Real Microphone
@@ -102,8 +102,6 @@ python3 /home/stef/Development/localAI/rtva/microphone_client.py
 ```
 /home/stef/Development/localAI/rtva/
 ├── microphone_client.py              # 🎤 Main microphone voice assistant
-├── test_microphone_simulation.py      # Test with pre-recorded audio
-├── test_e2e_pipeline.py               # Full pipeline test
 ├── MICROPHONE_USAGE.md               # Detailed usage guide
 ├── PROJECT_STATUS.md                 # This file
 │
@@ -126,10 +124,17 @@ python3 /home/stef/Development/localAI/rtva/microphone_client.py
 │   ├── tts.Dockerfile               # TTS container
 │   └── ...
 │
-└── models/
-    ├── parakeet/                    # Parakeet-TDT model files
-    ├── croissant/                   # CroissantLLM model
-    └── xtts_v2/                     # XTTS v2 model
+├── models/
+│   ├── croissant/                    # CroissantLLM model (671M)
+│   └── sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/  # Parakeet STT model (641M)
+│
+├── tests/
+│   ├── unit/                         # Unit tests
+│   ├── integration/                  # Integration tests
+│   └── contract/                     # Contract tests
+│
+└── specs/
+    └── ...                           # Project specifications
 ```
 
 ## Performance Metrics
@@ -166,14 +171,28 @@ python3 /home/stef/Development/localAI/rtva/microphone_client.py
 - [x] Microphone simulation (pre-recorded audio)
 - [x] Audio playback (sounddevice)
 - [x] Error handling & reconnection
+- [x] Real microphone input (hardware verified)
+- [x] Multi-turn conversation support
+- [x] Streaming audio synthesis
 
-### ✓ Ready for Testing
+### 🔧 Known Issues & Improvements
 
-- [ ] Real microphone input (hardware dependent)
+#### Voice Activity Detection (VAD)
+- **Current**: Fixed 5-second recording blocks
+- **Issue**: User must record for full duration, unnatural pauses not handled
+- **Solution**: Implement silent chunk filtering with threshold-based end-of-speech detection
+- **Status**: Partially implemented (needs refinement in `test_realtime_microphone.py`)
+
+#### Audio Quality
+- **Issue**: Silent periods within utterances may be filtered (Line 61 in test code)
+- **Impact**: Could affect downstream TTS/LLM processing
+- **Solution**: Buffer silent chunks and only drop if duration exceeds threshold
+- **Priority**: Medium
+
+#### STT Integration
+- [ ] Real Parakeet-TDT deployment (documented upgrade path)
 - [ ] Multi-language support (currently French only)
 - [ ] Wake word detection
-- [ ] Conversation persistence
-- [ ] Real Parakeet-TDT STT replacement
 
 ## Deployment Checklist
 
@@ -188,13 +207,16 @@ python3 /home/stef/Development/localAI/rtva/microphone_client.py
 
 ### Current Limitations
 
-1. **STT Service** - Uses dummy placeholder text
+1. **STT Service** - Uses dummy/placeholder text
    - **Solution**: Deploy real Parakeet-TDT 0.6B (documented)
    - **Benefit**: True speech-to-text, <50ms latency
+   - **Status**: Architecture ready for integration
 
-2. **Recording Duration** - Fixed 5-second blocks
-   - **Solution**: Implement voice activity detection (VAD)
-   - **Benefit**: Stop recording when silence detected
+2. **Recording Duration** - Fixed 5-second blocks with VAD improvements needed
+   - **Current**: Silence detection partially implemented
+   - **Issue**: Silent chunks excluded from recording (creates unnatural gaps)
+   - **Solution**: Refine VAD to buffer and preserve pauses within utterances
+   - **Priority**: High
 
 3. **Single Language** - French only
    - **Solution**: Add language selection parameter
@@ -253,14 +275,15 @@ docker-compose restart stt-service
 ### Run Tests
 
 ```bash
-# Test microphone with simulation
-python3 /home/stef/Development/localAI/rtva/test_microphone_simulation.py
+# Run all tests
+pytest
 
-# Test full pipeline
-python3 /home/stef/Development/localAI/rtva/test_e2e_pipeline.py
+# Run specific test type
+pytest tests/unit/
+pytest tests/integration/
 
-# Test with real microphone
-python3 /home/stef/Development/localAI/rtva/microphone_client.py
+# Run with coverage
+pytest --cov=src
 ```
 
 ### View Service Status
@@ -296,20 +319,26 @@ docker logs docker-tts-service-1
 
 ## What You Can Do Right Now
 
-1. **Test with Simulation** (no hardware needed)
+1. **Start the Services** (Docker or local)
    ```bash
-   python3 /home/stef/Development/localAI/rtva/test_microphone_simulation.py
+   # Docker
+   cd docker && docker-compose up -d
+   
+   # Or run locally
+   python3 src/stt_service/service.py &
+   python3 src/llm_service/service.py &
+   python3 src/tts_service/service.py &
    ```
 
-2. **Test with Real Microphone** (if you have audio hardware)
+2. **Run the Voice Assistant**
    ```bash
-   python3 /home/stef/Development/localAI/rtva/microphone_client.py
+   python3 microphone_client.py
    ```
 
-3. **Explore the Code**
-   - Check service implementations
-   - Review message protocols
-   - Study error handling
+3. **Run Tests**
+   ```bash
+   pytest
+   ```
 
 4. **Deploy Real Parakeet-TDT** (when ready)
    - Follow the documented upgrade path

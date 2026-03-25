@@ -64,6 +64,16 @@ Thumbs.db
 # Testing
 coverage/
 .nyc_output/
+tests/__pycache__/
+
+# Development tools
+.specify/
+.opencode/
+.opencode/
+
+# Audio output
+*.wav
+tts_output.wav
 
 # Misc
 *.tmp

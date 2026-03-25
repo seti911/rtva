@@ -6,8 +6,7 @@ To test the voice assistant with your microphone in real-time:
 
 ```bash
 cd /home/stef/Development/localAI/rtva
-source venv/bin/activate
-python3 test_live_microphone.py
+python3 microphone_client.py
 ```
 
 ## How It Works
@@ -46,36 +45,40 @@ source venv/bin/activate
 python3 -c "import sounddevice, scipy, websockets; print('✓ Ready')"
 ```
 
-## Test Scripts Available
+## Testing
 
-### 1. **Live Microphone Test** (Recommended)
+### Run the Voice Assistant
 ```bash
-python3 test_live_microphone.py
+python3 microphone_client.py
 ```
 Real-time conversation with voice input and audio output.
 
-### 2. **End-to-End Test with Pre-recorded Audio**
+### Run Unit Tests
 ```bash
-python3 test_e2e_with_audio.py
+pytest tests/unit/
 ```
-Uses test French audio file instead of microphone (useful for debugging).
 
-### 3. **Original Simulation Test**
+### Run Integration Tests
 ```bash
-python3 test_microphone_simulation.py
+pytest tests/integration/
 ```
-Tests pipeline with pre-recorded audio without audio playback.
+
+### Run All Tests
+```bash
+pytest
+```
 
 ## Troubleshooting
 
 ### No audio input detected
 - Check microphone: `python3 -c "import sounddevice; print(sounddevice.query_devices())"`
-- Try adjusting `SILENCE_THRESHOLD` in `test_live_microphone.py` (higher = less sensitive)
+- Verify microphone is connected and permissions are set
+- Check system audio settings
 
 ### No audio output
 - Check speakers/headphones are connected
 - Check volume levels
-- Try: `python3 test_e2e_with_audio.py` to test TTS independently
+- Verify TTS service is running: `docker-compose logs tts-service`
 
 ### Services not responding
 - Restart services: `docker-compose -f docker/docker-compose.yml restart`
@@ -122,21 +125,25 @@ TTS: [Audio plays response in French]
 
 ## File Locations
 
-- **Test scripts**: `/home/stef/Development/localAI/rtva/test_*.py`
+- **Voice client**: `/home/stef/Development/localAI/rtva/microphone_client.py`
 - **STT service**: `/home/stef/Development/localAI/rtva/src/stt_service/service.py`
 - **LLM service**: `/home/stef/Development/localAI/rtva/src/llm_service/service.py`
 - **TTS service**: `/home/stef/Development/localAI/rtva/src/tts_service/service.py`
+- **Tests**: `/home/stef/Development/localAI/rtva/tests/`
 - **Models**: `/home/stef/Development/localAI/rtva/models/`
 
 ## Advanced Configuration
 
-Edit the constants at the top of `test_live_microphone.py`:
+Edit the constants in `microphone_client.py`:
 
 ```python
-SAMPLE_RATE = 16000              # Audio sample rate
-CHUNK_DURATION = 0.5              # Recording chunk size
-SILENCE_THRESHOLD = 0.02           # Silence detection sensitivity (0-1)
-MIN_SILENCE_DURATION = 1.0        # Silence duration to end recording (seconds)
+assistant = MicrophoneVoiceAssistant(
+    stt_url="ws://localhost:8001/stt",
+    llm_url="ws://localhost:8002/llm",
+    tts_url="ws://localhost:8003/tts",
+    sample_rate=16000,
+    chunk_size=4096,
+)
 ```
 
 ---

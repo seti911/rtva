@@ -18,15 +18,16 @@ docker-compose ps
 
 ### 2. Run the Voice Assistant
 
-**Option A: With Real Microphone** (if you have audio hardware):
 ```bash
 python3 /home/stef/Development/localAI/rtva/microphone_client.py
 ```
 
-**Option B: With Simulated Microphone** (for testing, uses pre-recorded French audio):
-```bash
-python3 /home/stef/Development/localAI/rtva/test_microphone_simulation.py
-```
+The assistant will:
+1. Listen through your microphone for 5 seconds
+2. Send audio to STT service
+3. Process with LLM
+4. Synthesize response with TTS
+5. Play audio through speakers
 
 ## How It Works
 
@@ -198,11 +199,11 @@ python3 microphone_client.py
 
 ## Tips for Best Results
 
-1. **Speak clearly** - The dummy STT returns pre-recorded text, but future versions will need good audio
+1. **Speak clearly** - The STT service works best with clear speech
 2. **Quiet environment** - Reduces background noise
 3. **Standard microphone distance** - ~15-20cm from mic
 4. **Use headphones** - Prevents audio feedback loops when listening to responses
-5. **Test with simulation first** - Use `test_microphone_simulation.py` to verify setup
+5. **Check audio levels** - Test your microphone with: `python3 -c "import sounddevice as sd; print(sd.query_devices())"`
 
 ## Next Steps
 
@@ -234,9 +235,9 @@ Restart a specific service:
 cd /home/stef/Development/localAI/rtva/docker && docker-compose restart stt-service
 ```
 
-Test individual components:
+Run tests:
 ```bash
-python3 /home/stef/Development/localAI/rtva/test_e2e_pipeline.py
+pytest tests/
 ```
 
 ---

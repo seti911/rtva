@@ -4,8 +4,7 @@
 
 ```bash
 cd /home/stef/Development/localAI/rtva
-source venv/bin/activate
-python3 test_live_microphone.py
+python3 microphone_client.py
 ```
 
 ## Controls
